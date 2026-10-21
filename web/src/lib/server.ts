@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { ZodError } from "zod";
 import { WorkspaceStore } from "./store.ts";
 import type { ProviderConfig } from "./types.ts";
@@ -8,7 +8,7 @@ const serverState = globalThis as typeof globalThis & { jarvisStore?: WorkspaceS
 
 export function getStore(): WorkspaceStore {
   if (!serverState.jarvisStore) {
-    const directory = resolve(process.env.JARVIS_DATA_DIR || ".data");
+    const directory = process.env.JARVIS_DATA_DIR || join(process.cwd(), ".data");
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     serverState.jarvisStore = new WorkspaceStore(join(directory, "jarvis.sqlite"));
   }
