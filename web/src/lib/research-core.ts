@@ -95,6 +95,36 @@ export function validateCloudBrief(value: unknown, sources: Source[]) {
   return brief;
 }
 
+export function validateResearchPlan(value: unknown, query: string) {
+  const plan = z.object({
+    objective: z.string().trim().min(1).max(800),
+    queries: z.array(z.string().trim().min(3).max(180)).min(1).max(3),
+    checks: z.array(z.string().trim().min(1).max(240)).min(1).max(4),
+  }).strict().parse(value);
+  const queries = new Map<string, string>();
+  for (const term of [query, ...plan.queries]) {
+    if (!queries.has(term.toLocaleLowerCase())) queries.set(term.toLocaleLowerCase(), term);
+  }
+  return { ...plan, queries: [...queries.values()].slice(0, 3) };
+}
+
+export function validateEvidenceReview(value: unknown, brief: ReturnType<typeof validateCloudBrief>) {
+  const review = z.object({
+    summary: z.string().trim().min(1).max(4000),
+    keep: z.array(z.number().int().min(0)).min(1).max(8),
+    caveats: z.array(z.string().trim().min(1).max(600)).max(5),
+  }).strict().parse(value);
+  if (review.keep.some((index) => index >= brief.findings.length)) {
+    throw new Error("Pemeriksaan model merujuk temuan yang tidak dikenal.");
+  }
+  const findings = [...new Set(review.keep)].map((index) => brief.findings[index]);
+  return {
+    brief: { ...brief, summary: review.summary, findings },
+    caveats: review.caveats,
+    removedFindings: brief.findings.length - findings.length,
+  };
+}
+
 export function reportMarkdown(report: ResearchReport): string {
   const sourceNumber = new Map(report.sources.map((source, index) => [source.id, index + 1]));
   const findings = report.findings.map((finding) => {

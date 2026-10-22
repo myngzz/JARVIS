@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Activity as ActivityIcon, ArrowDownToLine, ArrowRight, ArrowUpRight, Asterisk,
   AudioLines, BookOpen, BrainCircuit, Check, CheckCheck, ChevronDown, ChevronRight,
-  CircleAlert, CircleCheck, Clock3, Compass, Database, FileText, Files,
+  Camera, CircleAlert, CircleCheck, Clock3, Compass, Database, FileText, Files,
   Globe2, History, Link2, LoaderCircle, LockKeyhole, Menu, Mic, MicOff,
   MoreHorizontal, PanelRightClose, Plus, Search, Send, Settings2, ShieldCheck,
   Sparkles, Square, Trash2, Upload, Volume2, VolumeX, X,
@@ -18,8 +18,10 @@ import { safeWebUrl } from "@/lib/research-core";
 import { useVoice } from "@/lib/use-voice";
 import type { ActionKind, Approval, ResearchInput, ResearchProgress, Source, Workspace } from "@/lib/types";
 import { Modal } from "./modal";
+import { VisionWorkspace } from "./vision-workspace";
+import { ResearchTools } from "./research-tools";
 
-type View = "research" | "documents" | "memory" | "approvals" | "history" | "settings";
+type View = "research" | "vision" | "documents" | "memory" | "approvals" | "history" | "settings";
 type Dialog =
   | { kind: "memory" | "voice" | "search" | "clear" }
   | { kind: "delete"; entity: "documents" | "memories" | "reports"; id: string; title: string }
@@ -29,6 +31,7 @@ type Dialog =
 
 const navigation: { id: View; label: string; icon: LucideIcon }[] = [
   { id: "research", label: "Ruang riset", icon: Compass },
+  { id: "vision", label: "Kamera", icon: Camera },
   { id: "documents", label: "Dokumen", icon: Files },
   { id: "memory", label: "Memori", icon: BrainCircuit },
   { id: "approvals", label: "Persetujuan", icon: ShieldCheck },
@@ -78,6 +81,7 @@ export default function JarvisWorkspace() {
   const [dialog, setDialog] = useState<Dialog>(null);
   const [notice, setNotice] = useState<{ message: string; error: boolean } | null>(null);
   const [mutating, setMutating] = useState(false);
+  const [runningAction, setRunningAction] = useState<ActionKind | null>(null);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [listSearch, setListSearch] = useState("");
@@ -88,6 +92,7 @@ export default function JarvisWorkspace() {
   const [clearText, setClearText] = useState("");
   const [moreActions, setMoreActions] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const actionAbortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -96,6 +101,7 @@ export default function JarvisWorkspace() {
   const pendingCount = data?.approvals.filter((approval) => approval.status === "pending").length ?? 0;
   const sources = report?.sources ?? [];
   const filteredSources = sources.filter((source) => sourceFilter === "all" || (sourceFilter === "web" ? source.kind === "web" : source.kind !== "web"));
+  const progressStages = options.useAi && options.depth === "deep" ? ["plan", "search", "sources", "compose", "review", "save"] : ["search", "sources", "compose", "save"];
 
   function notify(message: string, error = false) {
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
@@ -113,6 +119,7 @@ export default function JarvisWorkspace() {
   const voice = useVoice((text, controls) => {
     const command = text.toLocaleLowerCase().replace(/[.!?]/g, "");
     if (command === "buka dokumen") navigate("documents");
+    else if (command === "buka kamera") navigate("vision");
     else if (command === "buka memori") navigate("memory");
     else if (command === "buka persetujuan") navigate("approvals");
     else if (command === "baca laporan" && report) controls.speak(`${report.title}. ${report.summary}. ${report.findings.map((finding) => finding.text).join(" ")}`);
@@ -127,7 +134,7 @@ export default function JarvisWorkspace() {
     }).catch((error) => {
       if (!controller.signal.aborted) { setLoadError(true); setNotice({ message: error.message, error: true }); }
     });
-    return () => { controller.abort(); abortRef.current?.abort(); if (noticeTimer.current) clearTimeout(noticeTimer.current); };
+    return () => { controller.abort(); abortRef.current?.abort(); actionAbortRef.current?.abort(); if (noticeTimer.current) clearTimeout(noticeTimer.current); };
   }, []);
 
   useEffect(() => {
@@ -204,12 +211,15 @@ export default function JarvisWorkspace() {
   async function decide(approval: Approval, decision: "approve" | "reject") {
     if (mutating) return;
     setMutating(true);
+    const abort = new AbortController();
+    actionAbortRef.current = abort;
+    if (decision === "approve") setRunningAction(approval.action);
     try {
-      const result = await api<{ download?: { filename: string; content: string } }>(`/api/approvals/${approval.id}`, jsonRequest("POST", { decision }));
+      const result = await api<{ download?: { filename: string; content: string }; message?: string }>(`/api/approvals/${approval.id}`, { ...jsonRequest("POST", { decision }), signal: abort.signal });
       if (result.download) downloadText(result.download.filename, result.download.content);
-      notify(decision === "approve" ? "Tindakan selesai." : "Tindakan ditolak.");
+      notify(decision === "approve" ? result.message ?? "Tindakan selesai." : "Tindakan ditolak.");
     } catch (error) { notify(error instanceof Error ? error.message : "Tindakan gagal.", true); }
-    finally { await refresh().catch(() => undefined); setMutating(false); }
+    finally { await refresh().catch(() => undefined); setMutating(false); setRunningAction(null); actionAbortRef.current = null; }
   }
 
   async function saveMemory(event: React.FormEvent) {
@@ -245,7 +255,7 @@ export default function JarvisWorkspace() {
   }
 
   function selectReport(id: string) { setSelectedReport(id); setReportTab("brief"); navigate("research"); }
-  const pageTitle = view === "research" ? "Ruang riset" : view === "documents" ? "Pustaka dokumen" : view === "memory" ? "Memori pribadi" : view === "approvals" ? "Persetujuan tindakan" : view === "history" ? "Riwayat riset" : "Pengaturan workspace";
+  const pageTitle = view === "research" ? "Ruang riset" : view === "vision" ? "Kamera & analisis" : view === "documents" ? "Pustaka dokumen" : view === "memory" ? "Memori pribadi" : view === "approvals" ? "Persetujuan tindakan" : view === "history" ? "Riwayat riset" : "Pengaturan workspace";
   const matches = (text: string) => text.toLocaleLowerCase().includes(listSearch.toLocaleLowerCase());
 
   return (
@@ -268,16 +278,18 @@ export default function JarvisWorkspace() {
             <div className="page-heading"><div><div className="eyebrow"><span className="tiny-square" />PERSONAL INTELLIGENCE</div><h1>{pageTitle}</h1></div><span className="workspace-tag"><LockKeyhole size={12} />Pribadi</span></div>
 
             {view === "research" && <>
+              <div className="web-search-status" role="status"><Globe2 size={15} /><span>Web umum</span><strong>{data?.config.webProvider ?? "Memuat"}</strong>{data && !data.config.webConfigured && <IconButton label="Pengaturan pencarian web" onClick={() => navigate("settings")}><Settings2 size={16} /></IconButton>}</div>
               <form className={`research-composer ${busy ? "is-busy" : ""}`} onSubmit={submitResearch}>
                 <div className="composer-input"><Sparkles size={21} className="composer-spark" /><label className="sr-only" htmlFor="research-query">Topik atau pertanyaan</label><textarea id="research-query" ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Apa yang ingin Anda telusuri?" rows={2} maxLength={500} disabled={busy} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void submitResearch(); } }} /><IconButton label={voice.listening ? "Hentikan input suara" : "Input pertanyaan dengan suara"} onClick={startVoice} disabled={!voice.supported || busy} className={voice.listening ? "listening" : ""}>{voice.listening ? <MicOff size={19} /> : <Mic size={19} />}</IconButton></div>
                 <div className="composer-options"><div className="source-options">{([{ key: "web", label: "Web", icon: Globe2 }, { key: "documents", label: "Dokumen", icon: FileText }, { key: "memory", label: "Memori", icon: BrainCircuit }] as const).map(({ key, label, icon: Icon }) => <label key={key} className={`source-check ${options[key] ? "checked" : ""}`}><input type="checkbox" checked={options[key]} disabled={busy} onChange={(event) => setOptions({ ...options, [key]: event.target.checked })} /><Icon size={14} /><span>{label}</span></label>)}</div><div className="segmented depth-toggle" aria-label="Kedalaman riset"><button type="button" aria-pressed={options.depth === "quick"} onClick={() => setOptions({ ...options, depth: "quick" })} disabled={busy}>Ringkas</button><button type="button" aria-pressed={options.depth === "deep"} onClick={() => setOptions({ ...options, depth: "deep" })} disabled={busy}>Mendalam</button></div></div>
                 <div className="composer-footer"><label className={`ai-switch ${!data?.config.aiConfigured ? "unavailable" : ""}`} title={!data?.config.aiConfigured ? "AI cloud belum dikonfigurasi" : "Gunakan AI cloud"}><input type="checkbox" checked={options.useAi} disabled={!data?.config.aiConfigured || busy} onChange={(event) => setOptions({ ...options, useAi: event.target.checked, cloudConsent: false })} /><span className="switch-track" /><Sparkles size={13} /><span>{options.useAi ? data?.config.model : "Ekstraktif lokal"}</span></label>{busy ? <button className="button button-stop" type="button" onClick={() => abortRef.current?.abort()}><Square size={13} fill="currentColor" />Batalkan</button> : <button className="button button-primary research-submit" type="submit" disabled={!data || query.trim().length < 3}><span>Mulai riset</span><ArrowRight size={16} /></button>}</div>
                 {options.useAi && <label className="cloud-consent"><input type="checkbox" checked={options.cloudConsent} onChange={(event) => setOptions({ ...options, cloudConsent: event.target.checked })} />Saya menyetujui pengiriman pertanyaan dan petikan sumber terpilih, termasuk data pribadi, ke OpenAI.</label>}
               </form>
-              {busy && <div className="research-progress" role="status"><LoaderCircle size={16} className="spin" /><span>{progress?.message ?? "Menghubungkan sumber"}</span><span className="progress-steps">{["search", "sources", "compose", "save"].map((stage, index) => <span key={stage} className={index <= ["search", "sources", "compose", "save"].indexOf(progress?.stage ?? "search") ? "reached" : ""} />)}</span></div>}
+              {busy && <div className="research-progress" role="status"><LoaderCircle size={16} className="spin" /><span>{progress?.message ?? "Menghubungkan sumber"}</span><span className="progress-steps">{progressStages.map((stage, index) => <span key={stage} className={index <= progressStages.indexOf(progress?.stage ?? "search") ? "reached" : ""} />)}</span></div>}
               {researchError && <div className="inline-error" role="alert"><CircleAlert size={16} /><span>{researchError}</span></div>}
               {!busy && !query && <div className="suggestions"><span>Jelajahi</span>{["Energi terbarukan", "Kecerdasan buatan", "Ekonomi sirkular"].map((topic) => <button key={topic} onClick={() => { setQuery(topic); inputRef.current?.focus(); }}>{topic}<ArrowUpRight size={12} /></button>)}</div>}
 
+              {report && <ResearchTools report={report} disabled={busy || mutating} browserConfigured={Boolean(data?.config.browserConfigured)} onAction={(action) => void createApproval(action)} />}
               {report ? <section className="report-section" aria-label="Laporan riset">
                 <div className="report-tabs"><div role="tablist" aria-label="Tampilan laporan">{([{ id: "brief", label: "Laporan", icon: BookOpen }, { id: "sources", label: "Sumber", icon: Link2 }, { id: "activity", label: "Aktivitas", icon: ActivityIcon }] as const).map(({ id, label, icon: Icon }) => <button key={id} role="tab" aria-selected={reportTab === id} onClick={() => setReportTab(id)}><Icon size={15} />{label}{id === "sources" && <span className="tab-count">{sources.length}</span>}</button>)}</div><IconButton label="Tampilkan atau sembunyikan panel sumber" onClick={() => { if (window.innerWidth < 1180) setReportTab("sources"); else setEvidenceOpen(!evidenceOpen); }}><PanelRightClose size={17} /></IconButton></div>
                 {reportTab === "brief" && <article className="report-paper"><div className="report-kicker"><span className={`mode-badge ${report.mode}`}><span />{report.mode === "example" ? "Laporan contoh" : report.mode === "cloud" ? "Analisis AI" : "Laporan ekstraktif"}</span><div className="report-actions"><IconButton label={voice.speaking ? "Hentikan pembacaan" : "Bacakan laporan"} disabled={!voice.synthesisSupported} onClick={() => voice.speak(`${report.title}. ${report.summary}. ${report.findings.map((finding) => `${finding.heading}. ${finding.text}`).join(" ")}`)}>{voice.speaking ? <VolumeX size={17} /> : <Volume2 size={17} />}</IconButton><IconButton label="Ajukan ekspor Markdown" disabled={report.mode === "example" || mutating} onClick={() => void createApproval("export_markdown")}><ArrowDownToLine size={17} /></IconButton><div className="action-menu-anchor"><IconButton label="Tindakan laporan lainnya" disabled={report.mode === "example"} onClick={() => setMoreActions(!moreActions)}><MoreHorizontal size={19} /></IconButton>{moreActions && <div className="action-menu"><button onClick={() => void createApproval("save_memory")}><BrainCircuit size={15} />Simpan ke memori</button><button disabled={!data?.config.webhookConfigured} onClick={() => void createApproval("send_webhook")} title={!data?.config.webhookConfigured ? "Webhook belum dikonfigurasi" : "Ajukan pengiriman"}><Send size={15} />Kirim ke webhook</button><button className="danger-text" onClick={() => { setMoreActions(false); setDialog({ kind: "delete", entity: "reports", id: report.id, title: report.title }); }}><Trash2 size={15} />Hapus laporan</button></div>}</div></div></div>
@@ -300,7 +312,9 @@ export default function JarvisWorkspace() {
 
             {view === "history" && <section><div className="list-toolbar"><h2>Laporan tersimpan <span>{data?.reports.length ?? 0}</span></h2><label className="search-field"><Search size={15} /><input aria-label="Cari riwayat" placeholder="Cari laporan" value={listSearch} onChange={(event) => setListSearch(event.target.value)} /></label></div><div className="history-list">{data?.reports.filter((item) => matches(`${item.title} ${item.query}`)).map((item) => <article className="history-row" key={item.id}><span className="history-icon"><BookOpen size={21} /></span><button onClick={() => selectReport(item.id)}><h3>{item.title}</h3><span>{item.sources.length} sumber / {item.mode === "cloud" ? "Analisis AI" : "Ekstraktif"} / {dateLabel(item.createdAt, true)}</span></button><IconButton label={`Hapus laporan ${item.title}`} onClick={() => setDialog({ kind: "delete", entity: "reports", id: item.id, title: item.title })}><Trash2 size={16} /></IconButton><IconButton label={`Buka laporan ${item.title}`} onClick={() => selectReport(item.id)}><ArrowUpRight size={18} /></IconButton></article>)}</div>{!data?.reports.filter((item) => matches(`${item.title} ${item.query}`)).length && <div className="empty-state"><History size={36} strokeWidth={1.4} /><h3>{listSearch ? "Laporan tidak ditemukan" : "Belum ada riwayat riset"}</h3><button className="button button-secondary" onClick={newResearch}><Plus size={15} />Riset baru</button></div>}</section>}
 
-            {view === "settings" && <section className="settings-view"><div className="settings-section"><h2>Layanan</h2><div className="setting-row"><Globe2 size={20} /><div><strong>Pencarian web</strong><span>{data?.config.webProvider ?? "Memuat"}</span></div><span className="service-badge ready">Tersedia</span></div><div className="setting-row"><Sparkles size={20} /><div><strong>AI cloud</strong><span>{data?.config.aiConfigured ? data.config.model : "OpenAI"}</span></div><span className={`service-badge ${data?.config.aiConfigured ? "ready" : ""}`}>{data?.config.aiConfigured ? "Terhubung" : "Belum dikonfigurasi"}</span></div><div className="setting-row"><Send size={20} /><div><strong>Webhook</strong><span>{data?.config.webhookDestination ?? "Tidak ada tujuan"}</span></div><span className={`service-badge ${data?.config.webhookConfigured ? "ready" : ""}`}>{data?.config.webhookConfigured ? "Terhubung" : "Nonaktif"}</span></div></div><div className="settings-section"><h2>Suara</h2><div className="setting-row"><Mic size={20} /><div><strong>Pengenalan suara</strong><span>Bahasa Indonesia / layanan browser</span></div><span className={`service-badge ${voice.supported ? "ready" : ""}`}>{voice.supported ? "Tersedia" : "Tidak didukung"}</span></div><div className="setting-row"><Volume2 size={20} /><div><strong>Pembacaan laporan</strong><span>Bahasa Indonesia / suara perangkat</span></div><span className={`service-badge ${voice.synthesisSupported ? "ready" : ""}`}>{voice.synthesisSupported ? "Tersedia" : "Tidak didukung"}</span></div></div><div className="settings-section"><h2>Data & privasi</h2><div className="setting-row"><Database size={20} /><div><strong>Penyimpanan lokal server</strong><span>{data?.documents.length ?? 0} dokumen / {data?.memories.length ?? 0} memori / {data?.reports.length ?? 0} laporan</span></div><LockKeyhole size={17} /></div><div className="privacy-note"><ShieldCheck size={17} /><p>Dokumen dan memori hanya dikirim ke AI cloud setelah persetujuan. Kueri web dikirim ke penyedia pencarian yang aktif.</p></div><div className="danger-zone"><div><h3>Hapus seluruh data workspace</h3><p>Termasuk dokumen, memori, riwayat, dan persetujuan.</p></div><button className="button button-danger" onClick={() => { setClearText(""); setDialog({ kind: "clear" }); }}><Trash2 size={15} />Hapus data</button></div></div></section>}
+            {view === "settings" && <section className="settings-view"><div className="settings-section"><h2>Layanan</h2><div className="setting-row"><Globe2 size={20} /><div><strong>Pencarian web umum</strong><span>{data?.config.webConfigured ? data.config.webProvider : "Tavily / Brave"}</span></div><span className={`service-badge ${data?.config.webConfigured ? "ready" : ""}`}>{data?.config.webConfigured ? "Dikonfigurasi" : "Belum dikonfigurasi"}</span></div><div className="setting-row"><Sparkles size={20} /><div><strong>AI cloud</strong><span>{data?.config.aiConfigured ? data.config.model : "OpenAI"}</span></div><span className={`service-badge ${data?.config.aiConfigured ? "ready" : ""}`}>{data?.config.aiConfigured ? "Terhubung" : "Belum dikonfigurasi"}</span></div><div className="setting-row"><Send size={20} /><div><strong>Webhook</strong><span>{data?.config.webhookDestination ?? "Tidak ada tujuan"}</span></div><span className={`service-badge ${data?.config.webhookConfigured ? "ready" : ""}`}>{data?.config.webhookConfigured ? "Terhubung" : "Nonaktif"}</span></div></div><div className="settings-section"><h2>Suara</h2><div className="setting-row"><Mic size={20} /><div><strong>Pengenalan suara</strong><span>Bahasa Indonesia / layanan browser</span></div><span className={`service-badge ${voice.supported ? "ready" : ""}`}>{voice.supported ? "Tersedia" : "Tidak didukung"}</span></div><div className="setting-row"><Volume2 size={20} /><div><strong>Pembacaan laporan</strong><span>Bahasa Indonesia / suara perangkat</span></div><span className={`service-badge ${voice.synthesisSupported ? "ready" : ""}`}>{voice.synthesisSupported ? "Tersedia" : "Tidak didukung"}</span></div></div><div className="settings-section"><h2>Data & privasi</h2><div className="setting-row"><Database size={20} /><div><strong>Penyimpanan lokal server</strong><span>{data?.documents.length ?? 0} dokumen / {data?.memories.length ?? 0} memori / {data?.reports.length ?? 0} laporan</span></div><LockKeyhole size={17} /></div><div className="privacy-note"><ShieldCheck size={17} /><p>Dokumen dan memori hanya dikirim ke AI cloud setelah persetujuan. Kueri web dikirim ke penyedia pencarian yang aktif.</p></div><div className="danger-zone"><div><h3>Hapus seluruh data workspace</h3><p>Termasuk dokumen, memori, riwayat, dan persetujuan.</p></div><button className="button button-danger" onClick={() => { setClearText(""); setDialog({ kind: "clear" }); }}><Trash2 size={15} />Hapus data</button></div></div></section>}
+            {view === "vision" && <VisionWorkspace aiConfigured={Boolean(data?.config.aiConfigured)} onStored={async () => { await refresh(); }} notify={notify} />}
+            {runningAction && <div className="research-progress" role="status"><LoaderCircle size={16} className="spin" /><span>Menjalankan tindakan yang disetujui</span>{runningAction === "browser_read" && <button className="button button-stop" onClick={() => actionAbortRef.current?.abort()}><Square size={13} />Hentikan tindakan</button>}</div>}
             <footer className="workspace-footer"><span><span className="status-dot" />JARVIS WORKSPACE</span><span>Anda memegang kendali.</span></footer>
           </main>
 

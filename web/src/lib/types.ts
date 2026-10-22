@@ -19,6 +19,12 @@ export interface Finding {
   kind: "source" | "analysis" | "gap";
 }
 
+export interface ResearchPlan {
+  objective: string;
+  queries: string[];
+  checks: string[];
+}
+
 export interface ResearchReport {
   id: string;
   query: string;
@@ -31,6 +37,9 @@ export interface ResearchReport {
   warnings: string[];
   createdAt: string;
   durationMs: number;
+  plan?: ResearchPlan;
+  review?: { removedFindings: number };
+  searchProvider?: ProviderConfig["webProvider"];
 }
 
 export interface ResearchInput {
@@ -59,7 +68,7 @@ export interface MemoryRecord {
   createdAt: string;
 }
 
-export type ActionKind = "save_memory" | "export_markdown" | "send_webhook";
+export type ActionKind = "save_memory" | "export_markdown" | "send_webhook" | "browser_read" | "archive_report";
 export type ApprovalStatus = "pending" | "running" | "completed" | "rejected" | "failed";
 
 export interface Approval {
@@ -85,9 +94,18 @@ export interface Activity {
 export interface ProviderConfig {
   aiConfigured: boolean;
   model: string;
-  webProvider: "Wikipedia" | "Tavily";
+  webProvider: "Tavily" | "Brave" | "Belum dikonfigurasi";
+  webConfigured: boolean;
   webhookConfigured: boolean;
   webhookDestination: string | null;
+  browserConfigured: boolean;
+}
+
+export interface VisionResult {
+  summary: string;
+  observations: string[];
+  extractedText: string;
+  uncertainties: string[];
 }
 
 export interface Workspace {
@@ -100,7 +118,7 @@ export interface Workspace {
 }
 
 export interface ResearchProgress {
-  stage: "search" | "sources" | "compose" | "save";
+  stage: "plan" | "search" | "sources" | "compose" | "review" | "save";
   message: string;
   count?: number;
 }

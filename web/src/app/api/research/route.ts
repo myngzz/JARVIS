@@ -1,10 +1,11 @@
 import { researchInputSchema } from "@/lib/research-core";
 import { runResearch } from "@/lib/research";
+import { searchConfiguration } from "@/lib/search";
 import { ApiError, apiError, readJson } from "@/lib/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 90;
+export const maxDuration = 180;
 
 let running = 0;
 const starts: number[] = [];
@@ -12,6 +13,10 @@ const starts: number[] = [];
 export async function POST(request: Request) {
   try {
     const input = researchInputSchema.parse(await readJson(request));
+    if (input.web && !input.documents && !input.memory) {
+      const search = searchConfiguration();
+      if (!search.configured) throw new ApiError(search.error!, 503);
+    }
     while (starts.length && starts[0] < Date.now() - 60_000) starts.shift();
     if (running >= 2 || starts.length >= 8) throw new ApiError("Batas riset tercapai. Coba kembali sebentar lagi.", 429);
     running++;

@@ -3,6 +3,7 @@ import type { Workspace } from "../src/lib/types";
 
 declare global {
   interface Window {
+    __jarvisCameraTrack?: MediaStreamTrack;
     __jarvisVoiceTest?: {
       starts: number;
       transcript: ((text: string) => void) | null;
@@ -60,7 +61,7 @@ test("renders the workspace, images, source dialogs, and responsive navigation",
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
-  for (const label of ["Dokumen", "Memori", "Persetujuan", "Riwayat", "Ruang riset"]) {
+  for (const label of ["Kamera", "Dokumen", "Memori", "Persetujuan", "Riwayat", "Ruang riset"]) {
     await navigate(page, label);
     await expect(page.locator("main h1")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -203,15 +204,147 @@ test("requires voice consent before starting recognition and accepts an Indonesi
 });
 
 test("researches live public web sources", async ({ page, request }) => {
-  test.skip(process.env.JARVIS_LIVE_TESTS !== "1", "Set JARVIS_LIVE_TESTS=1 to contact Wikipedia.");
-  test.setTimeout(60_000);
+  test.skip(process.env.JARVIS_LIVE_TESTS !== "1" || !(await workspace(request)).config.webConfigured, "Live web search requires JARVIS_LIVE_TESTS=1 and a configured Tavily or Brave API key.");
+  test.setTimeout(120_000);
   await page.getByRole("textbox", { name: "Topik atau pertanyaan" }).fill("energi terbarukan");
   await page.getByRole("button", { name: "Mulai riset", exact: true }).click();
   await expect(page.locator(".mode-badge")).toHaveText("Laporan ekstraktif", { timeout: 35_000 });
   const report = (await workspace(request)).reports[0];
   expect(report.sources.length).toBeGreaterThan(0);
-  expect(report.sources.every((source) => source.kind === "web" && source.url?.startsWith("https://"))).toBe(true);
-  expect(report.warnings.join(" ")).toContain("Wikipedia ID/EN");
+  expect(report.sources.every((source) => source.kind === "web" && /^https?:\/\//.test(source.url ?? ""))).toBe(true);
+  expect(report.sources.some((source) => !/(^|\.)wikipedia\.org$/.test(source.host))).toBe(true);
+  expect(report.warnings.join(" ")).toContain("indeks web umum");
+  expect(["Tavily", "Brave"]).toContain(report.searchProvider);
   await page.getByRole("button", { name: "Lihat sumber 1", exact: true }).first().click();
-  await expect(page.getByRole("link", { name: "Buka sumber asli" })).toHaveAttribute("href", /^https:\/\/(id|en)\.wikipedia\.org\//);
+  await expect(page.getByRole("link", { name: "Buka sumber asli" })).toHaveAttribute("href", /^https?:\/\//);
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Telusuri sumber", exact: true }).click();
+  await expect(page.locator(".approval-status")).toHaveText("Menunggu");
+  expect((await workspace(request)).documents).toHaveLength(0);
+  await page.getByRole("button", { name: "Setujui & jalankan", exact: true }).click();
+  await expect.poll(async () => (await workspace(request)).approvals[0]?.status, { timeout: 80_000 }).toBe("completed");
+  const scanned = await workspace(request);
+  expect(scanned.documents.length).toBeGreaterThan(0);
+  const snapshot = await request.get(`/api/documents/${scanned.documents[0].id}`);
+  expect((await snapshot.json()).text).toMatch(/Sumber: https?:\/\//);
+});
+
+test("web search shows configuration errors instead of silently searching Wikipedia", async ({ page, request }) => {
+  test.skip((await workspace(request)).config.webConfigured, "This scenario requires an unconfigured search provider.");
+  await expect(page.locator(".web-search-status")).toContainText("Belum dikonfigurasi");
+  await page.getByRole("textbox", { name: "Topik atau pertanyaan" }).fill("energi terbarukan");
+  await page.getByRole("button", { name: "Mulai riset", exact: true }).click();
+  await expect(page.getByRole("main").getByRole("alert")).toContainText("TAVILY_API_KEY");
+  expect((await workspace(request)).reports).toHaveLength(0);
+  await page.getByRole("button", { name: "Pengaturan pencarian web", exact: true }).click();
+  await expect(page.locator(".setting-row").filter({ hasText: "Pencarian web umum" })).toContainText("Belum dikonfigurasi");
+});
+
+test("archives a report only after approval and rejects unsupported automation commands", async ({ page, request }) => {
+  await request.post("/api/documents", { multipart: { file: {
+    name: "energi.txt", mimeType: "text/plain", buffer: Buffer.from("Panel surya mengubah energi cahaya menjadi listrik. Energi surya membutuhkan penyimpanan untuk penggunaan malam hari."),
+  } } });
+  await researchLocally(page, "Dokumen");
+  await expect(page.getByRole("button", { name: "Telusuri sumber", exact: true })).toBeDisabled();
+  const report = (await workspace(request)).reports[0];
+  const unsupported = await request.post("/api/approvals", { data: { reportId: report.id, action: "run_shell", command: "whoami" } });
+  expect(unsupported.status()).toBe(400);
+  await page.getByRole("button", { name: "Arsipkan laporan", exact: true }).click();
+  await expect(page.locator(".approval-status")).toHaveText("Menunggu");
+  expect((await workspace(request)).documents).toHaveLength(1);
+  await page.getByRole("button", { name: "Setujui & jalankan", exact: true }).click();
+  await expect(page.locator(".approval-card")).toHaveCount(0);
+  const saved = await workspace(request);
+  expect(saved.documents).toHaveLength(2);
+  expect(saved.documents.some((document) => /^arsip-.*\.md$/.test(document.name))).toBe(true);
+  const repeat = await request.post(`/api/approvals/${saved.approvals[0].id}`, { data: { decision: "approve" } });
+  expect(repeat.status()).toBe(409);
+  expect((await workspace(request)).documents).toHaveLength(2);
+});
+
+test("camera captures locally, requires cloud consent, and releases the device", async ({ page, request }, testInfo) => {
+  await page.route("**/api/workspace", async (route) => {
+    const response = await route.fetch();
+    const data = await response.json();
+    await route.fulfill({ response, json: { ...data, config: { ...data.config, aiConfigured: true } } });
+  });
+  let sent = 0;
+  await page.route("**/api/vision", async (route) => {
+    const input = route.request().postDataJSON();
+    expect(input.cloudConsent).toBe(true);
+    expect(input.image).toMatch(/^data:image\/jpeg;base64,/);
+    sent++;
+    await route.fulfill({ json: {
+      summary: "Analisis kamera simulasi", observations: ["Pola kamera pengujian"], extractedText: "CAMERA TEST", uncertainties: ["Gambar sintetis untuk pengujian"],
+    } });
+  });
+  await page.reload();
+  await expect(page.locator(".connection-status")).toHaveText("Terhubung");
+  await navigate(page, "Kamera");
+  await expect(page.getByRole("button", { name: "Ambil gambar", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "Mulai kamera", exact: true }).click();
+  const video = page.locator(".vision-stage video");
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.videoWidth > 0 && element.readyState >= 2)).toBe(true);
+  const pixels = await video.evaluate((element: HTMLVideoElement) => {
+    window.__jarvisCameraTrack = (element.srcObject as MediaStream).getVideoTracks()[0];
+    const canvas = document.createElement("canvas");
+    canvas.width = 16; canvas.height = 16;
+    const context = canvas.getContext("2d")!;
+    context.drawImage(element, 0, 0, 16, 16);
+    return Array.from(context.getImageData(0, 0, 16, 16).data).filter((_value, index) => index % 4 !== 3);
+  });
+  expect(Math.max(...pixels) - Math.min(...pixels)).toBeGreaterThan(10);
+  await page.getByRole("button", { name: "Ambil gambar", exact: true }).click();
+  await expect(page.getByAltText("Cuplikan gambar terpilih")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Analisis gambar", exact: true })).toBeDisabled();
+  expect(sent).toBe(0);
+  await page.getByRole("checkbox", { name: /Saya menyetujui pengiriman gambar/ }).check();
+  await page.getByRole("button", { name: "Analisis gambar", exact: true }).click();
+  await expect(page.locator(".vision-result")).toContainText("CAMERA TEST");
+  expect(sent).toBe(1);
+  await page.getByRole("button", { name: "Simpan ke dokumen", exact: true }).click();
+  await expect.poll(async () => (await workspace(request)).documents.length).toBe(1);
+  await page.getByRole("button", { name: "Tutup notifikasi", exact: true }).click();
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  await page.screenshot({ path: testInfo.outputPath("camera.png"), fullPage: true, animations: "disabled", scale: "css" });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole("textbox", { name: "Pertanyaan tentang gambar" }).fill("Tuliskan teks yang tampak pada gambar.");
+  await expect(page.getByRole("checkbox", { name: /Saya menyetujui pengiriman gambar/ })).not.toBeChecked();
+  await expect(page.locator(".vision-result")).toHaveCount(0);
+  expect(sent).toBe(1);
+  await page.getByRole("checkbox", { name: /Saya menyetujui pengiriman gambar/ }).check();
+  await page.getByRole("button", { name: "Ambil gambar", exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: /Saya menyetujui pengiriman gambar/ })).not.toBeChecked();
+  await expect(page.locator(".vision-result")).toHaveCount(0);
+  await navigate(page, "Dokumen");
+  expect(await page.evaluate(() => window.__jarvisCameraTrack?.readyState)).toBe("ended");
+
+  const image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR3sAAAAASUVORK5CYII=";
+  const noConsent = await request.post("/api/vision", { data: { question: "Jelaskan gambar", image, cloudConsent: false } });
+  expect(noConsent.status()).toBe(400);
+  const noKey = await request.post("/api/vision", { data: { question: "Jelaskan gambar", image, cloudConsent: true } });
+  expect(noKey.status()).toBe(503);
+});
+
+test("shows the research plan and model review without bypassing cloud consent", async ({ page, request }) => {
+  const data = await workspace(request);
+  await page.route("**/api/workspace", (route) => route.fulfill({ json: {
+    ...data, config: { ...data.config, aiConfigured: true }, reports: [{
+      id: "00000000-0000-4000-8000-000000000001", query: "energi surya", title: "Perbandingan energi", summary: "Ringkasan simulasi", findings: [], sources: [],
+      mode: "cloud", provider: "test", warnings: [], createdAt: "2026-10-22T00:00:00.000Z", durationMs: 10,
+      plan: { objective: "Bandingkan bukti energi", queries: ["energi surya", "biaya energi"], checks: ["Tanggal sumber"] },
+      review: { removedFindings: 1 },
+    }],
+  } }));
+  await page.reload();
+  await expect(page.locator(".mode-badge")).toHaveText("Analisis AI");
+  await page.locator(".research-plan summary").click();
+  await expect(page.locator(".research-plan")).toContainText("Tanggal sumber");
+  await expect(page.locator(".review-status")).toContainText("1 temuan disisihkan");
+  await page.locator(".ai-switch").click();
+  await expect(page.locator(".ai-switch input")).toBeChecked();
+  await page.getByRole("textbox", { name: "Topik atau pertanyaan" }).fill("energi surya");
+  await page.getByRole("button", { name: "Mendalam", exact: true }).click();
+  await page.getByRole("button", { name: "Mulai riset", exact: true }).click();
+  await expect(page.getByRole("main").getByRole("alert")).toContainText("Persetujuan");
 });

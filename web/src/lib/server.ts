@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { ZodError } from "zod";
 import { WorkspaceStore } from "./store.ts";
+import { searchConfiguration } from "./search.ts";
 import type { ProviderConfig } from "./types.ts";
 
 const serverState = globalThis as typeof globalThis & { jarvisStore?: WorkspaceStore };
@@ -16,6 +17,7 @@ export function getStore(): WorkspaceStore {
 }
 
 export function providerConfig(): ProviderConfig {
+  const search = searchConfiguration();
   let webhookDestination: string | null = null;
   try {
     const url = new URL(process.env.JARVIS_WEBHOOK_URL || "");
@@ -24,14 +26,17 @@ export function providerConfig(): ProviderConfig {
   return {
     aiConfigured: Boolean(process.env.OPENAI_API_KEY),
     model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
-    webProvider: process.env.TAVILY_API_KEY ? "Tavily" : "Wikipedia",
+    webProvider: search.name,
+    webConfigured: search.configured,
     webhookConfigured: webhookDestination !== null,
     webhookDestination,
+    browserConfigured: process.env.JARVIS_BROWSER_ENABLED !== "false",
   };
 }
 
 export class ApiError extends Error {
-  constructor(message: string, public status = 400) { super(message); }
+  status: number;
+  constructor(message: string, status = 400) { super(message); this.status = status; }
 }
 
 export function apiError(error: unknown): Response {
@@ -42,7 +47,7 @@ export function apiError(error: unknown): Response {
   return Response.json({ error: "Permintaan gagal diproses. Silakan coba kembali." }, { status: 500 });
 }
 
-export async function readJson(request: Request): Promise<unknown> {
+export async function readJson(request: Request, maxBytes = 64_000): Promise<unknown> {
   const reader = request.body?.getReader();
   if (!reader) throw new ApiError("Permintaan kosong.");
   const decoder = new TextDecoder();
@@ -53,7 +58,7 @@ export async function readJson(request: Request): Promise<unknown> {
       const { value, done } = await reader.read();
       if (done) break;
       bytes += value.byteLength;
-      if (bytes > 64_000) {
+      if (bytes > maxBytes) {
         await reader.cancel();
         throw new ApiError("Permintaan terlalu besar.", 413);
       }

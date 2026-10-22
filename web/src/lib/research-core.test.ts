@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   chunkText, deduplicateSources, extractiveBrief, ftsQuery,
-  researchInputSchema, safeWebUrl, validateCloudBrief,
+  researchInputSchema, safeWebUrl, validateCloudBrief, validateResearchPlan, validateEvidenceReview,
 } from "./research-core.ts";
 import type { Source } from "./types.ts";
 
@@ -49,4 +49,28 @@ test("cloud reports with fabricated citation IDs are rejected", () => {
   assert.throws(() => validateCloudBrief(brief, [source]), /referensi/);
   brief.findings[0].sourceIds = [source.id];
   assert.equal(validateCloudBrief(brief, [source]).findings.length, 1);
+});
+
+test("research plans retain the original query and bound model-generated searches", () => {
+  const plan = validateResearchPlan({
+    objective: "Bandingkan pilihan energi", queries: ["Energi surya", "biaya energi", "risiko energi"],
+    checks: ["Periksa tanggal sumber"],
+  }, "energi surya");
+  assert.equal(plan.queries.length, 3);
+  assert.equal(plan.queries[0].toLowerCase(), "energi surya");
+  assert.throws(() => validateResearchPlan({ ...plan, command: "execute" }, "energi"));
+  assert.throws(() => validateResearchPlan({ ...plan, queries: Array(10).fill("energi") }, "energi"));
+});
+
+test("evidence review can remove findings but cannot invent indexes or citations", () => {
+  const brief = validateCloudBrief({ title: "Energi", summary: "Awal", findings: [
+    { heading: "Fakta", text: "Petikan", kind: "source", sourceIds: [source.id] },
+    { heading: "Dugaan", text: "Analisis", kind: "analysis", sourceIds: [source.id] },
+  ] }, [source]);
+  const review = validateEvidenceReview({ summary: "Ringkasan diperiksa", keep: [0, 0], caveats: ["Bukti terbatas"] }, brief);
+  assert.equal(review.brief.findings.length, 1);
+  assert.deepEqual(review.brief.findings[0].sourceIds, [source.id]);
+  assert.equal(review.removedFindings, 1);
+  assert.throws(() => validateEvidenceReview({ summary: "Tidak valid", keep: [5], caveats: [] }, brief));
+  assert.throws(() => validateEvidenceReview({ summary: "Tanpa bukti", keep: [], caveats: [] }, brief));
 });
