@@ -15,16 +15,17 @@ function configure(context: TestContext, values: Record<string, string>) {
 }
 
 test("general web selection uses configured providers without a Wikipedia fallback", () => {
-  assert.equal(searchConfiguration({}).configured, false);
-  assert.equal(searchConfiguration({ TAVILY_API_KEY: "test" }).provider, "tavily");
-  assert.equal(searchConfiguration({ BRAVE_SEARCH_API_KEY: "test" }).provider, "brave");
+  assert.equal(searchConfiguration({}).configured, true);
+  assert.equal(searchConfiguration({}).provider, "duckduckgo");
+  assert.equal(searchConfiguration({ TAVILY_API_KEY: "test" }).provider, "duckduckgo");
+  assert.equal(searchConfiguration({ BRAVE_SEARCH_API_KEY: "test" }).provider, "duckduckgo");
   assert.equal(searchConfiguration({ TAVILY_API_KEY: "test", BRAVE_SEARCH_API_KEY: "test", JARVIS_SEARCH_PROVIDER: "brave" }).provider, "brave");
   assert.equal(searchConfiguration({ TAVILY_API_KEY: "test", JARVIS_SEARCH_PROVIDER: "brave" }).configured, false);
   assert.equal(searchConfiguration({ JARVIS_SEARCH_PROVIDER: "wikipedia" }).configured, false);
 });
 
 test("Tavily searches general web domains and removes unsafe and duplicate results", async (context) => {
-  configure(context, { TAVILY_API_KEY: "test-key" });
+  configure(context, { TAVILY_API_KEY: "test-key", JARVIS_SEARCH_PROVIDER: "tavily" });
   context.mock.method(globalThis, "fetch", async (target: string, options: RequestInit) => {
     assert.equal(target, "https://api.tavily.com/search");
     const body = JSON.parse(String(options.body));
@@ -46,7 +47,7 @@ test("Tavily searches general web domains and removes unsafe and duplicate resul
 });
 
 test("Brave uses the search API token and returns multi-domain web snippets", async (context) => {
-  configure(context, { BRAVE_SEARCH_API_KEY: "test-key" });
+  configure(context, { BRAVE_SEARCH_API_KEY: "test-key", JARVIS_SEARCH_PROVIDER: "brave" });
   context.mock.method(globalThis, "fetch", async (target: URL, options: RequestInit) => {
     assert.equal(target.hostname, "api.search.brave.com");
     assert.equal(target.searchParams.get("q"), "battery research");
@@ -64,7 +65,7 @@ test("Brave uses the search API token and returns multi-domain web snippets", as
 });
 
 test("missing keys and cancellation never cause a hidden fallback request", async (context) => {
-  configure(context, {});
+  configure(context, { JARVIS_SEARCH_PROVIDER: "tavily" });
   context.mock.method(globalThis, "fetch", () => assert.fail("Unexpected search request"));
   await assert.rejects(searchWeb("energi", 5, new AbortController().signal), (error: unknown) => error instanceof WebSearchError && error.status === 503);
   process.env.TAVILY_API_KEY = "test-key";
@@ -73,10 +74,24 @@ test("missing keys and cancellation never cause a hidden fallback request", asyn
 });
 
 test("authentication and quota errors remain visible instead of being called empty results", async (context) => {
-  configure(context, { TAVILY_API_KEY: "test-key" });
+  configure(context, { TAVILY_API_KEY: "test-key", JARVIS_SEARCH_PROVIDER: "tavily" });
   context.mock.method(globalThis, "fetch", async () => new Response("private provider error", { status: 401 }));
   await assert.rejects(searchWeb("energi", 5, new AbortController().signal), /Kunci API Tavily/);
   context.mock.restoreAll();
   context.mock.method(globalThis, "fetch", async () => new Response(null, { status: 429 }));
   await assert.rejects(searchWeb("energi", 5, new AbortController().signal), /Kuota/);
+});
+
+test("auto mode uses HTML even when paid provider keys exist and does not retry challenges", async (context) => {
+  configure(context, { TAVILY_API_KEY: "unused", BRAVE_SEARCH_API_KEY: "unused" });
+  let calls = 0;
+  context.mock.method(globalThis, "fetch", async (url: URL, options: RequestInit) => {
+    calls++;
+    assert.equal(url.hostname, "html.duckduckgo.com");
+    assert.equal(options.body, undefined);
+    assert.equal(new Headers(options.headers).has("X-Subscription-Token"), false);
+    return new Response("verification required", { status: 202 });
+  });
+  await assert.rejects(searchWeb("energi surya", 5, new AbortController().signal), (error: unknown) => error instanceof WebSearchError && error.status === 429);
+  assert.equal(calls, 1);
 });

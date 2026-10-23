@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { safeWebUrl } from "./research-core.ts";
+import { KeylessSearchError, searchWithoutKey } from "./keyless-search.ts";
 import type { Source } from "./types.ts";
 
-export type SearchProviderName = "Tavily" | "Brave" | "Belum dikonfigurasi";
+export type SearchProviderName = "DuckDuckGo HTML" | "Tavily" | "Brave" | "Belum dikonfigurasi";
 
 export class WebSearchError extends Error {
   status: number;
@@ -11,28 +12,26 @@ export class WebSearchError extends Error {
 }
 
 export function searchConfiguration(environment: Readonly<Record<string, string | undefined>> = process.env): {
-  provider: "tavily" | "brave" | null;
+  provider: "duckduckgo" | "tavily" | "brave" | null;
   name: SearchProviderName;
   configured: boolean;
   error?: string;
 } {
   const selected = (environment.JARVIS_SEARCH_PROVIDER || "auto").trim().toLowerCase();
-  if (!["auto", "tavily", "brave"].includes(selected)) {
-    return { provider: null, name: "Belum dikonfigurasi", configured: false, error: "JARVIS_SEARCH_PROVIDER harus auto, tavily, atau brave." };
+  if (!["auto", "duckduckgo", "tavily", "brave"].includes(selected)) {
+    return { provider: null, name: "Belum dikonfigurasi", configured: false, error: "JARVIS_SEARCH_PROVIDER harus auto, duckduckgo, tavily, atau brave." };
   }
-  const provider = selected === "auto"
-    ? environment.TAVILY_API_KEY?.trim() ? "tavily" : environment.BRAVE_SEARCH_API_KEY?.trim() ? "brave" : null
-    : selected as "tavily" | "brave";
-  const configured = provider === "tavily" ? Boolean(environment.TAVILY_API_KEY?.trim()) : provider === "brave" ? Boolean(environment.BRAVE_SEARCH_API_KEY?.trim()) : false;
+  const provider = selected === "auto" ? "duckduckgo" : selected as "duckduckgo" | "tavily" | "brave";
+  const configured = provider === "duckduckgo" || (provider === "tavily" ? Boolean(environment.TAVILY_API_KEY?.trim()) : Boolean(environment.BRAVE_SEARCH_API_KEY?.trim()));
   return {
-    provider, name: provider === "tavily" ? "Tavily" : provider === "brave" ? "Brave" : "Belum dikonfigurasi", configured,
+    provider, name: provider === "duckduckgo" ? "DuckDuckGo HTML" : provider === "tavily" ? "Tavily" : "Brave", configured,
     ...(!configured ? { error: provider === "tavily" ? "Pencarian web Tavily memerlukan TAVILY_API_KEY di konfigurasi server."
       : provider === "brave" ? "Pencarian web Brave memerlukan BRAVE_SEARCH_API_KEY di konfigurasi server."
         : "Pencarian web umum belum dikonfigurasi. Isi TAVILY_API_KEY atau BRAVE_SEARCH_API_KEY di server, lalu mulai ulang. Dokumen dan memori lokal tetap dapat digunakan." } : {}),
   };
 }
 
-function searchSources(hits: { title: string; url: string; content: string }[], limit: number): Source[] {
+export function searchSources(hits: { title: string; url: string; content: string }[], limit: number): Source[] {
   const seen = new Set<string>();
   const sources: Source[] = [];
   for (const hit of hits) {
@@ -57,6 +56,19 @@ export async function searchWeb(query: string, limit: number, signal: AbortSigna
   if (!config.configured) throw new WebSearchError(config.error!, 503);
   signal.throwIfAborted();
   const count = Math.min(10, Math.max(1, Math.floor(limit)));
+  if (config.provider === "duckduckgo") {
+    try {
+      const hits = await searchWithoutKey(query, signal);
+      return {
+        sources: searchSources(hits, count), provider: config.name,
+        warnings: ["Pencarian memakai halaman HTML publik DuckDuckGo tanpa API key. Cuplikan hasil bukan verifikasi fakta; akses otomatis dapat dibatasi penyedia dan tidak mencakup seluruh web."],
+      };
+    } catch (error) {
+      signal.throwIfAborted();
+      if (error instanceof KeylessSearchError) throw new WebSearchError(error.message, error.status);
+      throw new WebSearchError("Pencarian tanpa API tidak dapat dihubungi. Buka pencarian di browser dan masukkan tautan sumber manual.");
+    }
+  }
   const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(20_000)]);
   let response: Response;
   if (config.provider === "tavily") {

@@ -94,7 +94,7 @@ export interface Activity {
 export interface ProviderConfig {
   aiConfigured: boolean;
   model: string;
-  webProvider: "Tavily" | "Brave" | "Belum dikonfigurasi";
+  webProvider: "DuckDuckGo HTML" | "Tavily" | "Brave" | "Belum dikonfigurasi";
   webConfigured: boolean;
   webhookConfigured: boolean;
   webhookDestination: string | null;
