@@ -25,10 +25,18 @@ test("deep research executes bounded stages and falls back when review is invali
 
   let aiCalls = 0;
   let webCalls = 0;
+  let htmlCalls = 0;
+  let htmlBlocked = false;
   let badReview = false;
   let searchUnavailable = false;
   context.mock.method(globalThis, "fetch", async (target: string | URL | Request, options?: RequestInit) => {
     const url = new URL(target instanceof Request ? target.url : String(target));
+    if (url.hostname === "html.duckduckgo.com") {
+      htmlCalls++;
+      assert.equal(options?.body, undefined);
+      if (htmlBlocked) return new Response("Verification required", { status: 202 });
+      return new Response('<div class="result"><a class="result__a" href="https://energy.example.gov/solar">Energi surya</a><div class="result__snippet">Panel surya mengubah cahaya matahari menjadi listrik.</div></div>', { headers: { "Content-Type": "text/html" } });
+    }
     if (url.hostname === "api.tavily.com") {
       webCalls++;
       if (searchUnavailable) return new Response(null, { status: 429 });
@@ -82,4 +90,20 @@ test("deep research executes bounded stages and falls back when review is invali
   assert.equal(local.sources[0].kind, "document");
   assert.match(local.warnings.join(" "), /Kuota/);
   assert.equal(local.searchProvider, undefined);
+
+  process.env.JARVIS_SEARCH_PROVIDER = "auto";
+  const paidCalls = aiCalls + webCalls;
+  const keyless = await runResearch({ ...input, useAi: false }, () => undefined, new AbortController().signal);
+  assert.equal(keyless.mode, "extractive");
+  assert.equal(keyless.searchProvider, "DuckDuckGo HTML");
+  assert.equal(keyless.sources[0].host, "energy.example.gov");
+  assert.match(keyless.warnings.join(" "), /tanpa API key/);
+  assert.equal(htmlCalls, 1);
+  assert.equal(aiCalls + webCalls, paidCalls);
+  htmlBlocked = true;
+  const reportCount = getStore().reports().length;
+  await assert.rejects(runResearch({ ...input, useAi: false }, () => undefined, new AbortController().signal), /membatasi pencarian/);
+  assert.equal(htmlCalls, 2);
+  assert.equal(aiCalls + webCalls, paidCalls);
+  assert.equal(getStore().reports().length, reportCount);
 });

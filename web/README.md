@@ -19,7 +19,7 @@ npm run dev -- --hostname 127.0.0.1 --port 3000
 
 Buka <http://127.0.0.1:3000>. Laporan awal berlabel **Laporan contoh** bukan hasil riset baru. Masukkan pertanyaan, pilih Web, Dokumen, atau Memori, lalu mulai riset. Untuk dokumen pribadi, unggah melalui halaman Dokumen terlebih dahulu.
 
-Pencarian web memakai indeks web umum Tavily atau Brave, bukan sumber Wikipedia tetap. Isi salah satu API key pencarian untuk mengaktifkannya. Tanpa key, pilih Dokumen atau Memori dan nonaktifkan Web untuk riset lokal. Mode **Ekstraktif lokal** menyusun petikan sumber, bukan analisis model AI atau verifikasi independen. Laporan contoh di halaman awal tetap merupakan referensi terkurasi, bukan hasil pencarian baru.
+Pencarian web bawaan membaca halaman hasil HTML publik DuckDuckGo tanpa API key. Dokumen, memori, dan tautan publik yang Anda masukkan juga dapat dipakai tanpa layanan API berbayar. Mode **Ekstraktif lokal** menyusun petikan sumber, bukan analisis model AI atau verifikasi independen. Laporan contoh di halaman awal tetap merupakan referensi terkurasi, bukan hasil pencarian baru.
 
 ## Konfigurasi Opsional
 
@@ -33,9 +33,9 @@ Isi hanya variabel yang diperlukan di `.env.local`, lalu mulai ulang server. Jan
 | --- | --- |
 | `OPENAI_API_KEY` | Mengaktifkan pilihan sintesis AI cloud. |
 | `OPENAI_MODEL` | Model OpenAI; default `gpt-4.1-mini`. Mendukung JSON chat completions dan input gambar untuk kamera. |
-| `TAVILY_API_KEY` | Mengaktifkan pencarian indeks web umum Tavily. |
-| `BRAVE_SEARCH_API_KEY` | Alternatif pencarian indeks web umum Brave Search. |
-| `JARVIS_SEARCH_PROVIDER` | `auto` (default), `tavily`, atau `brave`. Mode auto memilih Tavily jika key-nya ada, kemudian Brave. |
+| `TAVILY_API_KEY` | Opsional; hanya digunakan jika provider `tavily` dipilih secara eksplisit. |
+| `BRAVE_SEARCH_API_KEY` | Opsional; hanya digunakan jika provider `brave` dipilih secara eksplisit. |
+| `JARVIS_SEARCH_PROVIDER` | `duckduckgo`, `auto`, `tavily`, atau `brave`. Nilai kosong/auto selalu memakai DuckDuckGo HTML tanpa key, meskipun key berbayar tersimpan. |
 | `JARVIS_WEBHOOK_URL` | Tujuan HTTPS tetap untuk tindakan kirim laporan; harus disetujui dari UI. |
 | `JARVIS_ACCESS_TOKEN` | Kata sandi HTTP Basic untuk mengamankan akses aplikasi. |
 | `JARVIS_DATA_DIR` | Direktori SQLite; default `.data` relatif terhadap direktori aplikasi. |
@@ -43,21 +43,39 @@ Isi hanya variabel yang diperlukan di `.env.local`, lalu mulai ulang server. Jan
 
 API key tidak dikirim ke frontend. Penggunaan layanan eksternal dapat dikenakan biaya. Laporan AI yang gagal atau menghasilkan ID sitasi tidak valid dialihkan ke petikan ekstraktif dan ditandai dengan peringatan.
 
-## Pencarian Web Umum
+## Pencarian Tanpa API
 
-1. Buat API key di [Tavily](https://app.tavily.com/) atau [Brave Search API](https://brave.com/search/api/). Periksa kuota dan harga layanan yang berlaku.
-2. Isi `TAVILY_API_KEY` atau `BRAVE_SEARCH_API_KEY` di `.env.local`. Tidak perlu mengisi keduanya dan jangan menaruh key di variabel `NEXT_PUBLIC_*`.
-3. Biarkan `JARVIS_SEARCH_PROVIDER=auto`, atau pilih provider secara eksplisit. Key yang tidak cocok dengan pilihan provider tidak dipakai sebagai fallback diam-diam.
-4. Mulai ulang server. Halaman Pengaturan menampilkan provider yang dikonfigurasi, dan ruang riset menampilkan status **Web umum**.
-5. Aktifkan sumber **Web** dan jalankan pertanyaan. `OPENAI_API_KEY` tidak dibutuhkan untuk menerima hasil pencarian dan laporan ekstraktif.
+Tidak perlu membuat akun penyedia pencarian atau mengisi API key. Gunakan `JARVIS_SEARCH_PROVIDER=duckduckgo`, biarkan `auto`, atau jangan isi variabel tersebut. Mulai ulang server jika sebelumnya provider berbayar dipilih secara eksplisit.
 
-Hasil dapat berasal dari berita, dokumentasi, jurnal, situs pemerintah, organisasi, dan situs publik lain dalam indeks provider. Wikipedia masih bisa muncul sebagai salah satu hasil jika relevan, tetapi tidak menjadi batas pencarian. Ini tidak berarti seluruh halaman internet tercakup: halaman privat, login/paywall, situs yang tidak diindeks, dan data yang baru terbit bisa tidak tersedia.
+1. Masukkan topik pada ruang riset.
+2. Aktifkan sumber **Web** dan biarkan AI cloud nonaktif jika tidak ingin memakai layanan AI berbayar.
+3. Jalankan riset. JARVIS membaca judul, tautan tujuan, dan petikan yang benar-benar terdapat di halaman hasil HTML.
+4. Periksa sitasi dan sumber asli sebelum memakai hasilnya sebagai dasar keputusan.
 
-Mode Ringkas meminta maksimal 5 hasil per kueri, dan Mendalam maksimal 10. Riset AI mendalam dapat membuat hingga 3 kueri, dengan maksimal 16 sumber yang dipertahankan dalam laporan. URL dideduplikasi, tautan non-HTTP/HTTPS atau berisi kredensial ditolak, dan provider dicatat pada laporan. Cuplikan hasil mesin pencari tidak sama dengan isi lengkap artikel; gunakan tautan sumber atau tindakan **Telusuri sumber** untuk memeriksanya.
+Hasil dapat berasal dari berita, dokumentasi, jurnal, situs pemerintah, organisasi, dan situs publik lain dalam indeks penyedia. Wikipedia bisa muncul jika relevan, tetapi bukan batas pencarian. Mode ini tetap memakai koneksi internet dan mengirim kueri ke DuckDuckGo. Status **Web tanpa API** berarti tidak memakai API key pencarian, bukan jaminan penyedia selalu dapat diakses.
 
-Key belum tersedia, key ditolak, kuota habis, dan kegagalan layanan menghasilkan pesan yang berbeda. Tidak ada fallback otomatis ke Wikipedia atau provider lain. Jika dokumen/memori juga dipilih dan cocok, riset dapat memakai sumber lokal saja dengan peringatan eksplisit tentang kegagalan web.
+HTML bukan API resmi yang stabil. CAPTCHA, pembatasan lalu lintas, gangguan jaringan, atau perubahan struktur halaman dapat menghentikan pencarian otomatis. Aplikasi melaporkannya secara eksplisit, tanpa hasil buatan, pengulangan otomatis, bypass verifikasi, atau fallback diam-diam ke layanan berbayar. Jika sumber lokal atau tautan langsung juga tersedia, laporan dapat memakai sumber yang berhasil diambil dengan peringatan.
 
-Endpoint pencarian gratis berbasis halaman HTML tidak dijadikan backend karena dapat dibatasi CAPTCHA dan tidak menyediakan kontrak API yang stabil. Aplikasi tidak mencoba melewati pembatasan tersebut.
+Mode Ringkas mempertahankan maksimal 5 hasil per kueri, dan Mendalam maksimal 10. Riset AI mendalam dapat membuat hingga 3 kueri, dengan maksimal 16 sumber dalam laporan. Tidak semua halaman internet tercakup, khususnya halaman privat, login/paywall, atau situs yang tidak diindeks.
+
+## Tautan Sumber Langsung
+
+Saat pencarian otomatis dibatasi, klik **Buka pencarian di browser**. Pilih artikel publik yang relevan, lalu kembali ke JARVIS:
+
+1. Buka **Tautan sumber** dan masukkan maksimal tiga URL, satu per baris.
+2. Isi topik riset. Nonaktifkan **Web** jika hanya ingin membaca tautan tersebut tanpa menghubungi mesin pencari.
+3. Jalankan riset. Tautan juga bisa digabungkan dengan dokumen, memori, atau pencarian web.
+4. Periksa laporan ekstraktif dan sitasinya. Laporan yang hanya menggunakan tautan ditandai **Tautan langsung**.
+
+Impor memakai HTTP dan parser HTML, tanpa API key atau Chromium. Pembatas jaringan yang sama dengan browser baca-saja tetap berlaku: alamat privat/localhost ditolak, DNS diperiksa dan IP koneksi dipasangkan, redirect dibatasi pada hostname yang sama, serta ukuran halaman maksimal 2 MB. Skrip dan formulir tidak dijalankan; halaman verifikasi tidak diperlakukan sebagai sumber.
+
+Hanya teks HTML/teks publik yang didukung. Petikan sumber dibatasi hingga 3.000 karakter; ini bukan pengambilan seluruh isi situs. Halaman yang membutuhkan login, JavaScript, atau akses berbayar dapat gagal. Untuk PDF, gunakan unggahan Dokumen. Jika sebagian tautan tidak dapat dibaca, hasil yang berhasil tetap dipertahankan dan kegagalan ditampilkan sebagai peringatan.
+
+## Provider Opsional
+
+Integrasi Tavily dan Brave tetap tersedia sebagai pilihan eksplisit, bukan syarat penggunaan. Untuk mengaktifkannya, isi key yang sesuai dan atur `JARVIS_SEARCH_PROVIDER=tavily` atau `brave`, lalu mulai ulang server. Periksa kuota dan harga penyedia. `auto` tidak memilih provider berbayar secara otomatis lagi.
+
+Key yang hilang, ditolak, atau kehabisan kuota dilaporkan secara jelas. `OPENAI_API_KEY` terpisah dari pengaturan pencarian dan hanya diperlukan untuk analisis AI/gambar yang diaktifkan pengguna.
 
 ## Riset AI Mendalam
 
@@ -69,7 +87,7 @@ Aktifkan sakelar AI cloud, pilih **Mendalam**, dan berikan persetujuan pengirima
 4. Meminta model meninjau draft terhadap petikan dan menyingkirkan temuan yang dianggap tidak didukung.
 5. Menyimpan laporan, rencana, sitasi, keterbatasan, dan hasil peninjauan di riwayat.
 
-Satu riset mendalam dapat memakai tiga panggilan AI dan tiga pencarian per provider. Biaya lebih tinggi daripada mode Ringkas. Batas waktu pipeline 150 detik; tidak ada retry AI otomatis. Pembatalan tidak menjamin biaya permintaan yang sudah dikirim ikut dibatalkan.
+Satu riset AI mendalam dapat memakai tiga panggilan AI dan hingga tiga pencarian HTML atau API provider yang dipilih. Biaya AI lebih tinggi daripada mode Ringkas; pencarian HTML sendiri tidak memerlukan API berbayar. Batas waktu pipeline 150 detik; tidak ada retry AI otomatis. Pembatalan tidak menjamin biaya permintaan AI yang sudah dikirim ikut dibatalkan.
 
 Peninjauan memakai model yang sama, bukan pemeriksa fakta independen. Validasi memastikan ID sitasi tersedia, bukan membuktikan bahwa setiap klaim benar. Kegagalan sintesis atau peninjauan mengembalikan laporan ekstraktif dengan peringatan. Tanpa AI cloud, **Mendalam** hanya meningkatkan jumlah sumber dan tidak melakukan penalaran model.
 
@@ -134,7 +152,7 @@ Isolasi ini adalah pembatas aplikasi dan konteks browser, bukan mesin virtual ke
 
 Data disimpan di server yang menjalankan aplikasi, bukan di browser. SQLite tidak dienkripsi secara otomatis. Gunakan enkripsi disk, cadangan yang aman, dan jangan menaruh direktori data di dalam folder publik.
 
-Pertanyaan dikirim ke layanan pencarian saat Web aktif. Dokumen dan memori baru dikirim ke OpenAI jika AI cloud diaktifkan dan persetujuan pengiriman diberikan. Sitasi menunjukkan sumber yang tersedia, bukan jaminan kebenaran klaim.
+Pertanyaan dikirim ke penyedia pencarian saat Web aktif. Tautan sumber langsung menghubungi situs yang Anda pilih dan menyimpan petikan dalam laporan lokal. Dokumen, memori, dan petikan sumber baru dikirim ke OpenAI jika AI cloud diaktifkan dan persetujuan pengiriman diberikan. Sitasi menunjukkan sumber yang tersedia, bukan jaminan kebenaran klaim.
 
 Akses dengan hostname selain localhost ditolak jika `JARVIS_ACCESS_TOKEN` belum diatur. Untuk tautan port Codespaces atau akses jarak jauh:
 
@@ -164,16 +182,16 @@ npx playwright install --with-deps chromium
 npm run test:e2e
 ```
 
-Tes browser menjalankan build produksi pada port 3100 dan memakai database sementara terpisah. Dalam mode rutin, semua key pencarian/AI dinonaktifkan. Tutup server lain pada port itu atau tentukan `JARVIS_E2E_PORT`. Jika kode aplikasi berubah, ulangi build sebelum tes browser.
+Tes browser menjalankan build produksi pada port 3100 dengan database sementara terpisah, provider DuckDuckGo HTML, dan semua key pencarian/AI dikosongkan. Tutup server lain pada port itu atau tentukan `JARVIS_E2E_PORT`. Jika kode aplikasi berubah, ulangi build sebelum tes browser.
 
 ```bash
 JARVIS_E2E_PORT=3101 npm run test:e2e
 JARVIS_LIVE_TESTS=1 npm run test:e2e
 ```
 
-Mode live membutuhkan key pencarian pada environment proses pengujian, bukan hanya `.env.local`. Dengan `JARVIS_LIVE_TESTS=1`, hanya key Tavily/Brave dan pemilihan provider yang diteruskan ke server tes. Ini dapat memakai kuota layanan. Jika key tidak tersedia, tes live dilewati secara eksplisit; OpenAI tetap tidak dipanggil oleh tes browser.
+Dengan `JARVIS_LIVE_TESTS=1`, tes mengimpor halaman dokumentasi W3C dan membaca ulang sumbernya melalui browser setelah persetujuan. Ini membutuhkan internet, tetapi tidak membutuhkan atau meneruskan API key apa pun. Tes rutin menyimulasikan pemblokiran pencarian agar CAPTCHA tidak membuat hasil pengujian bergantung pada kondisi mesin pencari.
 
-Pemeriksaan rutin mencakup tampilan desktop/HP, gambar, navigasi, unggah Markdown, riset dokumen/memori, sitasi, ekspor, arsip, persetujuan, persistensi, penghapusan data terkait, kamera sintetis, status provider, dan simulasi izin suara. Tes unit memeriksa hasil pencarian lintas domain, key/kuota, pipeline AI dengan respons provider simulasi, pembatas DNS/URL, serta fallback sitasi. Pengujian live tambahan menghubungi API pencarian umum dan membaca sumbernya dengan browser produksi. Screenshot dan trace kegagalan ada di `test-results`.
+Pemeriksaan rutin mencakup tampilan desktop/HP, gambar, navigasi, unggah Markdown, riset dokumen/memori, sitasi, ekspor, arsip, persetujuan, persistensi, penghapusan data terkait, kamera sintetis, status tanpa API, validasi tautan, dan simulasi izin suara. Tes unit memeriksa parser hasil HTML, penolakan CAPTCHA, batas ukuran, pembatalan, impor artikel, pembatas DNS/URL, serta pipeline tanpa pemakaian key berbayar. Screenshot dan trace kegagalan ada di `test-results`.
 
 Pengujian kamera memakai perangkat sintetis dan pemeriksaan piksel, bukan kamera fisik. Pengujian suara memakai simulasi API browser, bukan pengukuran akurasi mikrofon. Respons cloud kamera/riset disimulasikan; kualitas jawaban OpenAI tidak diukur dengan kredensial nyata. Adapter Tavily/Brave telah diuji dengan respons simulasi; akses akun dan kuota nyata perlu diuji setelah key diisi. Webhook eksternal serta perangkat kacamata juga belum diuji dengan kredensial atau perangkat nyata.
 
