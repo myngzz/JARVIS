@@ -39,7 +39,7 @@ export interface ResearchReport {
   durationMs: number;
   plan?: ResearchPlan;
   review?: { removedFindings: number };
-  searchProvider?: ProviderConfig["webProvider"];
+  searchProvider?: ProviderConfig["webProvider"] | "Tautan langsung";
 }
 
 export interface ResearchInput {
@@ -50,6 +50,7 @@ export interface ResearchInput {
   depth: "quick" | "deep";
   useAi: boolean;
   cloudConsent: boolean;
+  urls?: string[];
 }
 
 export interface DocumentRecord {

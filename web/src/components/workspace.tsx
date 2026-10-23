@@ -14,7 +14,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { api, downloadText, jsonRequest, researchStream } from "@/lib/client";
 import { exampleReport } from "@/lib/example";
-import { safeWebUrl } from "@/lib/research-core";
+import { researchInputSchema, safeWebUrl } from "@/lib/research-core";
 import { useVoice } from "@/lib/use-voice";
 import type { ActionKind, Approval, ResearchInput, ResearchProgress, Source, Workspace } from "@/lib/types";
 import { Modal } from "./modal";
@@ -70,6 +70,7 @@ export default function JarvisWorkspace() {
   const [view, setView] = useState<View>("research");
   const [selectedReport, setSelectedReport] = useState("example");
   const [query, setQuery] = useState("");
+  const [sourceLinks, setSourceLinks] = useState("");
   const [options, setOptions] = useState<Omit<ResearchInput, "query">>({ web: true, documents: false, memory: false, depth: "quick", useAi: false, cloudConsent: false });
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<ResearchProgress | null>(null);
@@ -102,6 +103,8 @@ export default function JarvisWorkspace() {
   const sources = report?.sources ?? [];
   const filteredSources = sources.filter((source) => sourceFilter === "all" || (sourceFilter === "web" ? source.kind === "web" : source.kind !== "web"));
   const progressStages = options.useAi && options.depth === "deep" ? ["plan", "search", "sources", "compose", "review", "save"] : ["search", "sources", "compose", "save"];
+  const sourceUrls = [...new Set(sourceLinks.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))];
+  const keylessSearch = data?.config.webProvider === "DuckDuckGo HTML";
 
   function notify(message: string, error = false) {
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
@@ -155,21 +158,21 @@ export default function JarvisWorkspace() {
   }
 
   function newResearch() {
-    navigate("research"); setQuery(""); setSelectedReport("blank"); setResearchError(""); setReportTab("brief");
+    navigate("research"); setQuery(""); setSourceLinks(""); setSelectedReport("blank"); setResearchError(""); setReportTab("brief");
     setTimeout(() => inputRef.current?.focus(), 30);
   }
 
   async function submitResearch(event?: React.FormEvent) {
     event?.preventDefault();
     if (busy) return;
-    if (query.trim().length < 3) { setResearchError("Topik minimal 3 karakter."); return; }
-    if (!options.web && !options.documents && !options.memory) { setResearchError("Pilih setidaknya satu sumber."); return; }
+    const input = researchInputSchema.safeParse({ query, ...options, urls: sourceUrls });
+    if (!input.success) { setResearchError(input.error.issues[0]?.message ?? "Input riset tidak valid."); return; }
     if (options.useAi && !options.cloudConsent) { setResearchError("Persetujuan pengiriman ke AI cloud belum diberikan."); return; }
     const controller = new AbortController();
     abortRef.current = controller;
     setBusy(true); setResearchError(""); setProgress(null); setReportTab("brief"); voice.stopSpeaking();
     try {
-      const result = await researchStream({ query: query.trim(), ...options }, controller.signal, setProgress);
+      const result = await researchStream(input.data, controller.signal, setProgress);
       await refresh();
       setSelectedReport(result.id);
       setSourceFilter("all");
@@ -278,10 +281,11 @@ export default function JarvisWorkspace() {
             <div className="page-heading"><div><div className="eyebrow"><span className="tiny-square" />PERSONAL INTELLIGENCE</div><h1>{pageTitle}</h1></div><span className="workspace-tag"><LockKeyhole size={12} />Pribadi</span></div>
 
             {view === "research" && <>
-              <div className="web-search-status" role="status"><Globe2 size={15} /><span>Web umum</span><strong>{data?.config.webProvider ?? "Memuat"}</strong>{data && !data.config.webConfigured && <IconButton label="Pengaturan pencarian web" onClick={() => navigate("settings")}><Settings2 size={16} /></IconButton>}</div>
+              <div className="web-search-status" role="status"><Globe2 size={15} /><span>{keylessSearch ? "Web tanpa API" : "Web umum"}</span><strong>{data?.config.webProvider ?? "Memuat"}</strong>{data && !data.config.webConfigured && <IconButton label="Pengaturan pencarian web" onClick={() => navigate("settings")}><Settings2 size={16} /></IconButton>}{query.trim().length >= 3 && <a className="text-button external-search" href={`https://duckduckgo.com/?q=${encodeURIComponent(query.trim())}`} target="_blank" rel="noreferrer">Buka pencarian di browser<ArrowUpRight size={14} /></a>}</div>
               <form className={`research-composer ${busy ? "is-busy" : ""}`} onSubmit={submitResearch}>
                 <div className="composer-input"><Sparkles size={21} className="composer-spark" /><label className="sr-only" htmlFor="research-query">Topik atau pertanyaan</label><textarea id="research-query" ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Apa yang ingin Anda telusuri?" rows={2} maxLength={500} disabled={busy} onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key === "Enter") { event.preventDefault(); void submitResearch(); } }} /><IconButton label={voice.listening ? "Hentikan input suara" : "Input pertanyaan dengan suara"} onClick={startVoice} disabled={!voice.supported || busy} className={voice.listening ? "listening" : ""}>{voice.listening ? <MicOff size={19} /> : <Mic size={19} />}</IconButton></div>
                 <div className="composer-options"><div className="source-options">{([{ key: "web", label: "Web", icon: Globe2 }, { key: "documents", label: "Dokumen", icon: FileText }, { key: "memory", label: "Memori", icon: BrainCircuit }] as const).map(({ key, label, icon: Icon }) => <label key={key} className={`source-check ${options[key] ? "checked" : ""}`}><input type="checkbox" checked={options[key]} disabled={busy} onChange={(event) => setOptions({ ...options, [key]: event.target.checked })} /><Icon size={14} /><span>{label}</span></label>)}</div><div className="segmented depth-toggle" aria-label="Kedalaman riset"><button type="button" aria-pressed={options.depth === "quick"} onClick={() => setOptions({ ...options, depth: "quick" })} disabled={busy}>Ringkas</button><button type="button" aria-pressed={options.depth === "deep"} onClick={() => setOptions({ ...options, depth: "deep" })} disabled={busy}>Mendalam</button></div></div>
+                <details className="direct-sources"><summary><Link2 size={15} /><span>Tautan sumber</span><span>{sourceUrls.length} / 3</span><ChevronDown size={14} /></summary><label className="sr-only" htmlFor="source-links">URL sumber, satu per baris</label><textarea id="source-links" rows={3} maxLength={6100} value={sourceLinks} disabled={busy} onChange={(event) => setSourceLinks(event.target.value)} placeholder={"https://example.org/artikel\nhttps://example.com/riset"} spellCheck={false} /></details>
                 <div className="composer-footer"><label className={`ai-switch ${!data?.config.aiConfigured ? "unavailable" : ""}`} title={!data?.config.aiConfigured ? "AI cloud belum dikonfigurasi" : "Gunakan AI cloud"}><input type="checkbox" checked={options.useAi} disabled={!data?.config.aiConfigured || busy} onChange={(event) => setOptions({ ...options, useAi: event.target.checked, cloudConsent: false })} /><span className="switch-track" /><Sparkles size={13} /><span>{options.useAi ? data?.config.model : "Ekstraktif lokal"}</span></label>{busy ? <button className="button button-stop" type="button" onClick={() => abortRef.current?.abort()}><Square size={13} fill="currentColor" />Batalkan</button> : <button className="button button-primary research-submit" type="submit" disabled={!data || query.trim().length < 3}><span>Mulai riset</span><ArrowRight size={16} /></button>}</div>
                 {options.useAi && <label className="cloud-consent"><input type="checkbox" checked={options.cloudConsent} onChange={(event) => setOptions({ ...options, cloudConsent: event.target.checked })} />Saya menyetujui pengiriman pertanyaan dan petikan sumber terpilih, termasuk data pribadi, ke OpenAI.</label>}
               </form>

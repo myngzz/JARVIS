@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { planResearch, reviewResearch, synthesizeResearch } from "./ai.ts";
 import { deduplicateSources, extractiveBrief } from "./research-core.ts";
 import { searchConfiguration, searchWeb, WebSearchError } from "./search.ts";
+import { importSources } from "./source-import.ts";
 import { ApiError, getStore, providerConfig } from "./server.ts";
 import type { ResearchInput, ResearchPlan, ResearchProgress, ResearchReport, Source } from "./types.ts";
 
@@ -11,7 +12,7 @@ export async function runResearch(input: ResearchInput, progress: (event: Resear
   const config = providerConfig();
   if (input.useAi && !config.aiConfigured) throw new ApiError("AI cloud belum dikonfigurasi. Gunakan mode ekstraktif.");
   if (input.useAi && !input.cloudConsent) throw new ApiError("Persetujuan pengiriman pertanyaan dan petikan sumber ke AI cloud diperlukan.");
-  if (input.web && !config.webConfigured && !input.documents && !input.memory) {
+  if (input.web && !config.webConfigured && !input.documents && !input.memory && !input.urls?.length) {
     throw new ApiError(searchConfiguration().error!, 503);
   }
   const limit = input.depth === "deep" ? 10 : 5;
@@ -30,6 +31,22 @@ export async function runResearch(input: ResearchInput, progress: (event: Resear
   const localSources = deduplicateSources(queries.flatMap((query) => getStore().search(query, { documents: input.documents, memory: input.memory, limit })));
   let webSources: Source[] = [];
   const searchErrors: WebSearchError[] = [];
+  let directSources: Source[] = [];
+  if (input.urls?.length) {
+    progress({ stage: "search", message: "Membaca tautan sumber yang dipilih" });
+    try {
+      const imported = await importSources(input.urls, signal);
+      directSources = imported.sources;
+      warnings.push(...imported.warnings);
+      if (!directSources.length) searchErrors.push(new WebSearchError(imported.warnings.join(" ") || "Tautan sumber tidak dapat dibaca."));
+      else warnings.push(`${directSources.length} tautan dibaca langsung tanpa API pencarian. Hanya teks HTML yang dapat diakses publik; skrip, login, dan verifikasi tidak dijalankan.`);
+    } catch {
+      signal.throwIfAborted();
+      const error = new WebSearchError("Tautan sumber tidak dapat diimpor. Gunakan maksimal tiga URL HTTP/HTTPS publik pada port standar tanpa kredensial.");
+      searchErrors.push(error);
+      warnings.push(error.message);
+    }
+  }
   if (input.web) {
     const searches = await Promise.allSettled(queries.map((query) => searchWeb(query, limit, signal)));
     for (const search of searches) {
@@ -46,7 +63,7 @@ export async function runResearch(input: ResearchInput, progress: (event: Resear
     webSources = deduplicateSources(webSources);
   }
   signal.throwIfAborted();
-  const sources = deduplicateSources([...localSources.slice(0, webSources.length ? 8 : 16), ...webSources]).slice(0, 16);
+  const sources = deduplicateSources([...directSources, ...localSources.slice(0, webSources.length ? 8 : 16), ...webSources]).slice(0, 16);
   if (!sources.length && searchErrors.length) throw new ApiError(searchErrors[0].message, searchErrors[0].status);
   if (!sources.length) throw new ApiError("Tidak ada sumber yang cocok. Coba kata kunci lebih spesifik atau tambahkan dokumen.", 404);
   if ((input.documents || input.memory) && !localSources.length) warnings.push("Tidak ada dokumen atau memori lokal yang cocok dengan kata kunci.");
@@ -77,7 +94,7 @@ export async function runResearch(input: ResearchInput, progress: (event: Resear
     provider: mode === "cloud" ? config.model : "Ekstraktif lokal",
     warnings: [...new Set(warnings)], createdAt: new Date().toISOString(), durationMs: Date.now() - started,
     plan, review,
-    searchProvider: webSources.length ? config.webProvider : undefined,
+    searchProvider: webSources.length ? config.webProvider : directSources.length ? "Tautan langsung" : undefined,
   };
   signal.throwIfAborted();
   progress({ stage: "save", message: "Menyimpan laporan di workspace lokal" });

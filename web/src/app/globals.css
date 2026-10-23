@@ -492,6 +492,13 @@ h1 { font: 500 28px/1.2 var(--display); color: #26333b; }
 .web-search-status { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: -6px 0 15px; color: var(--muted); font-size: 11px; }
 .web-search-status strong { font-weight: 500; color: var(--ink); overflow-wrap: anywhere; }
 .web-search-status .icon-button { width: 26px; height: 26px; flex-basis: 26px; }
+.web-search-status .external-search { margin-left: auto; font-size: 11px; }
+.direct-sources { border-top: 1px solid var(--line); padding: 12px 17px; }
+.direct-sources summary { display: flex; align-items: center; gap: 8px; color: #52655d; cursor: pointer; font-size: 11px; }
+.direct-sources summary > span:first-of-type { flex: 1; }
+.direct-sources summary > span:last-of-type { color: var(--muted); }
+.direct-sources[open] summary { margin-bottom: 10px; }
+.direct-sources textarea { display: block; width: 100%; resize: vertical; padding: 10px; border: 1px solid #dce3e6; border-radius: 5px; font-size: 12px; line-height: 1.7; }
 .research-plan { border-bottom: 1px solid var(--line); padding: 0 0 15px; margin-bottom: 15px; }
 .research-plan summary { display: flex; gap: 9px; align-items: center; cursor: pointer; font-weight: 600; font-size: 12px; }
 .research-plan summary span:last-child { margin-left: auto; color: var(--muted); font-weight: 400; }

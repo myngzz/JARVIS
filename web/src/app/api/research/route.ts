@@ -13,7 +13,7 @@ const starts: number[] = [];
 export async function POST(request: Request) {
   try {
     const input = researchInputSchema.parse(await readJson(request));
-    if (input.web && !input.documents && !input.memory) {
+    if (input.web && !input.documents && !input.memory && !input.urls.length) {
       const search = searchConfiguration();
       if (!search.configured) throw new ApiError(search.error!, 503);
     }
