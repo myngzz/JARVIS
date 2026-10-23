@@ -17,6 +17,15 @@ test("input requires a query and at least one source", () => {
   assert.equal(researchInputSchema.parse({ query: "  energi  " }).query, "energi");
 });
 
+test("direct source links work without search and reject unsafe or excessive input", () => {
+  const input = { query: "energi", web: false, urls: [" https://example.org/research "] };
+  assert.deepEqual(researchInputSchema.parse(input).urls, ["https://example.org/research"]);
+  assert.deepEqual(researchInputSchema.parse({ query: "energi" }).urls, []);
+  assert.equal(researchInputSchema.safeParse({ ...input, urls: ["file:///etc/passwd"] }).success, false);
+  assert.equal(researchInputSchema.safeParse({ ...input, urls: ["https://user:secret@example.org"] }).success, false);
+  assert.equal(researchInputSchema.safeParse({ ...input, urls: Array(4).fill("https://example.org") }).success, false);
+});
+
 test("FTS input cannot introduce operators or SQL syntax", () => {
   assert.equal(ftsQuery('energi" OR 1=1 --'), '"energi" OR "or"');
   assert.equal(ftsQuery("yang dan di"), "");

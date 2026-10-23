@@ -9,7 +9,8 @@ export const researchInputSchema = z.object({
   depth: z.enum(["quick", "deep"]).default("quick"),
   useAi: z.boolean().default(false),
   cloudConsent: z.boolean().default(false),
-}).refine((input) => input.web || input.documents || input.memory, {
+  urls: z.array(z.string().trim().max(2000).refine((value) => Boolean(safeWebUrl(value)), "Tautan sumber harus HTTP/HTTPS tanpa kredensial.")).max(3, "Maksimal tiga tautan sumber per riset.").default([]),
+}).refine((input) => input.web || input.documents || input.memory || input.urls.length > 0, {
   message: "Pilih setidaknya satu sumber.",
 });
 
