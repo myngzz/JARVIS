@@ -203,18 +203,27 @@ test("requires voice consent before starting recognition and accepts an Indonesi
   await expect(page.getByRole("button", { name: "Mulai input suara", exact: true })).toBeVisible();
 });
 
-test("researches live public web sources", async ({ page, request }) => {
-  test.skip(process.env.JARVIS_LIVE_TESTS !== "1" || !(await workspace(request)).config.webConfigured, "Live web search requires JARVIS_LIVE_TESTS=1 and a configured Tavily or Brave API key.");
+test("imports live public sources without search API keys", async ({ page, request }, testInfo) => {
+  test.skip(process.env.JARVIS_LIVE_TESTS !== "1", "Set JARVIS_LIVE_TESTS=1 to read a real public page without API keys.");
   test.setTimeout(120_000);
-  await page.getByRole("textbox", { name: "Topik atau pertanyaan" }).fill("energi terbarukan");
+  expect((await workspace(request)).config.webProvider).toBe("DuckDuckGo HTML");
+  await page.getByRole("textbox", { name: "Topik atau pertanyaan" }).fill("web accessibility");
+  await page.getByRole("checkbox", { name: "Web", exact: true }).uncheck();
+  await page.locator(".direct-sources summary").click();
+  await page.getByRole("textbox", { name: "URL sumber, satu per baris" }).fill("https://www.w3.org/WAI/fundamentals/accessibility-intro/");
   await page.getByRole("button", { name: "Mulai riset", exact: true }).click();
   await expect(page.locator(".mode-badge")).toHaveText("Laporan ekstraktif", { timeout: 35_000 });
   const report = (await workspace(request)).reports[0];
-  expect(report.sources.length).toBeGreaterThan(0);
-  expect(report.sources.every((source) => source.kind === "web" && /^https?:\/\//.test(source.url ?? ""))).toBe(true);
-  expect(report.sources.some((source) => !/(^|\.)wikipedia\.org$/.test(source.host))).toBe(true);
-  expect(report.warnings.join(" ")).toContain("indeks web umum");
-  expect(["Tavily", "Brave"]).toContain(report.searchProvider);
+  expect(report.sources).toHaveLength(1);
+  expect(report.sources[0].url).toBe("https://www.w3.org/WAI/fundamentals/accessibility-intro/");
+  expect(report.sources[0].title).toContain("Accessibility");
+  expect(report.sources[0].excerpt.length).toBeGreaterThan(80);
+  expect(report.warnings.join(" ")).toContain("tanpa API pencarian");
+  expect(report.searchProvider).toBe("Tautan langsung");
+  await page.getByRole("button", { name: "Tutup notifikasi", exact: true }).click();
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  await page.screenshot({ path: testInfo.outputPath("direct-sources.png"), fullPage: true, animations: "disabled", scale: "css" });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.getByRole("button", { name: "Lihat sumber 1", exact: true }).first().click();
   await expect(page.getByRole("link", { name: "Buka sumber asli" })).toHaveAttribute("href", /^https?:\/\//);
   await page.keyboard.press("Escape");
@@ -229,15 +238,31 @@ test("researches live public web sources", async ({ page, request }) => {
   expect((await snapshot.json()).text).toMatch(/Sumber: https?:\/\//);
 });
 
-test("web search shows configuration errors instead of silently searching Wikipedia", async ({ page, request }) => {
-  test.skip((await workspace(request)).config.webConfigured, "This scenario requires an unconfigured search provider.");
-  await expect(page.locator(".web-search-status")).toContainText("Belum dikonfigurasi");
+test("keyless search exposes verification blocks and offers direct source input", async ({ page, request }) => {
+  expect((await workspace(request)).config.webProvider).toBe("DuckDuckGo HTML");
+  await expect(page.locator(".web-search-status")).toContainText("Web tanpa API");
+  let searches = 0;
+  await page.route("**/api/research", async (route) => {
+    searches++;
+    expect(route.request().postDataJSON().useAi).toBe(false);
+    await route.fulfill({ contentType: "text/event-stream", body: `event: error\ndata: ${JSON.stringify({ message: "Penyedia pencarian meminta verifikasi manusia. Gunakan tautan sumber manual." })}\n\n` });
+  });
   await page.getByRole("textbox", { name: "Topik atau pertanyaan" }).fill("energi terbarukan");
+  const external = page.getByRole("link", { name: "Buka pencarian di browser", exact: true });
+  await expect(external).toHaveAttribute("href", "https://duckduckgo.com/?q=energi%20terbarukan");
+  await expect(external).toHaveAttribute("target", "_blank");
   await page.getByRole("button", { name: "Mulai riset", exact: true }).click();
-  await expect(page.getByRole("main").getByRole("alert")).toContainText("TAVILY_API_KEY");
+  await expect(page.getByRole("main").getByRole("alert")).toContainText("verifikasi manusia");
   expect((await workspace(request)).reports).toHaveLength(0);
-  await page.getByRole("button", { name: "Pengaturan pencarian web", exact: true }).click();
-  await expect(page.locator(".setting-row").filter({ hasText: "Pencarian web umum" })).toContainText("Belum dikonfigurasi");
+  await page.getByRole("checkbox", { name: "Web", exact: true }).uncheck();
+  await page.locator(".direct-sources summary").click();
+  await page.getByRole("textbox", { name: "URL sumber, satu per baris" }).fill("file:///etc/passwd");
+  await page.getByRole("button", { name: "Mulai riset", exact: true }).click();
+  await expect(page.getByRole("main").getByRole("alert")).toContainText("HTTP/HTTPS");
+  await page.getByRole("textbox", { name: "URL sumber, satu per baris" }).fill(Array(4).fill(0).map((_value, index) => `https://example.com/${index}`).join("\n"));
+  await page.getByRole("button", { name: "Mulai riset", exact: true }).click();
+  await expect(page.getByRole("main").getByRole("alert")).toContainText("Maksimal tiga");
+  expect(searches).toBe(1);
 });
 
 test("archives a report only after approval and rejects unsupported automation commands", async ({ page, request }) => {

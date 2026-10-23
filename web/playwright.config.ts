@@ -5,7 +5,6 @@ import { defineConfig, devices } from "@playwright/test";
 
 const port = Number(process.env.JARVIS_E2E_PORT || 3100);
 const baseURL = `http://127.0.0.1:${port}`;
-const liveSearch = process.env.JARVIS_LIVE_TESTS === "1";
 
 export default defineConfig({
   testDir: "./e2e",
@@ -33,9 +32,9 @@ export default defineConfig({
       JARVIS_DATA_DIR: join(tmpdir(), `jarvis-e2e-${randomUUID()}`),
       JARVIS_ACCESS_TOKEN: "",
       OPENAI_API_KEY: "",
-      TAVILY_API_KEY: liveSearch ? process.env.TAVILY_API_KEY || "" : "",
-      BRAVE_SEARCH_API_KEY: liveSearch ? process.env.BRAVE_SEARCH_API_KEY || "" : "",
-      JARVIS_SEARCH_PROVIDER: liveSearch ? process.env.JARVIS_SEARCH_PROVIDER || "auto" : "auto",
+      TAVILY_API_KEY: "",
+      BRAVE_SEARCH_API_KEY: "",
+      JARVIS_SEARCH_PROVIDER: "duckduckgo",
       JARVIS_WEBHOOK_URL: "",
       JARVIS_BROWSER_ENABLED: "true",
     },
