@@ -71,12 +71,10 @@ export function VisionWorkspace({ aiConfigured, onStored, notify }: {
       if (token === generation.current) { stopCamera(); setError("Kamera tidak tersedia atau izinnya ditolak. Anda tetap dapat mengunggah gambar."); }
     } finally { if (token === generation.current) setStarting(false); }
   }
-
   function selectImage(value: string) {
     abortRef.current?.abort();
     setImage(value); setConsent(false); setResult(null); setError("");
   }
-
   function capture() {
     try {
       const video = videoRef.current;
